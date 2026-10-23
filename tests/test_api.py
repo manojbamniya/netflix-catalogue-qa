@@ -1,48 +1,13 @@
-"""Tests for the API, using a tiny database built with ingest.write_database."""
+"""Tests for the API. The tiny database and `client` fixture are in conftest.py."""
 
-import sqlite3
-from collections.abc import Iterator
 from pathlib import Path
 
-import pandas as pd
 import pytest
+from conftest import TITLES
 from fastapi.testclient import TestClient
 from httpx2 import Response
 
 import api.main
-import ingest
-from api.database import get_connection, open_connection
-
-TITLES = [
-    # show_id, type, title, country, year, rating
-    ("1", "Movie", "Andhadhun", "India", 2018, "TV-MA"),
-    ("2", "Movie", "Brick Lane", "United Kingdom, India", 2007, "R"),
-    ("3", "TV Show", "Chhota Bheem", "India", 2019, "TV-Y7"),
-    ("4", "Movie", "Diego Garcia", "British Indian Ocean Territory", 2018, "TV-MA"),
-    ("5", "Movie", "Empty Country", None, 2018, "TV-MA"),
-    ("6", "TV Show", "Fargo", "United States", 2014, "TV-MA"),
-]
-
-
-@pytest.fixture
-def client(tmp_path: Path) -> Iterator[TestClient]:
-    """A test client whose endpoints read a small database in tmp_path."""
-    df = pd.DataFrame(
-        TITLES, columns=["show_id", "type", "title", "country", "year", "rating"]
-    ).assign(movie_description="Some text.")
-    db_path = tmp_path / "test.db"
-    ingest.write_database(df, db_path)
-
-    def test_connection() -> Iterator[sqlite3.Connection]:
-        conn = open_connection(db_path)
-        try:
-            yield conn
-        finally:
-            conn.close()
-
-    api.main.app.dependency_overrides[get_connection] = test_connection
-    yield TestClient(api.main.app)
-    api.main.app.dependency_overrides.clear()
 
 
 def ids(response: Response) -> list[str]:
