@@ -1,24 +1,35 @@
 # Netflix Catalogue Q&A System
 
 Loads the Netflix catalogue into SQLite and serves it through a small FastAPI
-API. My reasoning and data findings are in [NOTES.md](NOTES.md).
+API, including natural-language Q&A grounded in the catalogue (RAG with
+sentence-transformers + Gemini). My reasoning and data findings are in
+[NOTES.md](NOTES.md).
 
 ## Setup
 
-Needs Python 3.10 or newer.
+Needs Python 3.10 or newer (on macOS 27 use 3.11+: the scipy build for 3.10
+doesn't load there).
 
 ```bash
-python3.10 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env    # then put your Gemini API key in .env
 ```
+
+A free Gemini key comes from https://aistudio.google.com/apikey. Everything
+except `POST /ask` works without one.
 
 ## How to run
 
 ```bash
 python ingest.py                 # builds data/netflix.db and prints a summary
+python -m rag.index              # embeds every title into data/embeddings.npz
 uvicorn api.main:app --reload    # starts the API on http://127.0.0.1:8000
 ```
+
+`python -m rag.index` downloads the embedding model (~90 MB) the first time,
+then takes about 15 seconds.
 
 Open http://127.0.0.1:8000/docs to try the endpoints in the browser.
 
@@ -27,12 +38,24 @@ Open http://127.0.0.1:8000/docs to try the endpoints in the browser.
 | `GET /titles` | `/titles?country=India&type=Movie&release_year=2019&rating=TV-MA&page=1&page_size=20` |
 | `GET /titles/{show_id}` | `/titles/81075235` |
 | `GET /stats` | `/stats` |
+| `POST /ask` | body `{"question": "Suggest me a comedy movie from India with a strong female lead"}` |
 
 `?country=Unknown` returns titles with no country. `type` is `Movie` or
 `TV Show`. Bad parameters return a 400 error naming the parameter.
 
-Paths can be changed with the `NETFLIX_CSV_PATH`, `NETFLIX_TITLES_CSV_PATH` and
-`NETFLIX_DB_PATH` environment variables.
+`POST /ask` returns `{"answer": ..., "show_ids": [...], "sources": [{"show_id", "title"}]}`.
+Every `show_id` is a title that was retrieved and given to the model; if none
+fit, the answer says so and `sources` is empty. It returns 503 if the key or
+the index is missing, and 502 if Gemini fails.
+
+```bash
+curl -X POST http://127.0.0.1:8000/ask -H "Content-Type: application/json" \
+  -d '{"question": "an anime series about gambling at school"}'
+```
+
+Settings (all optional except the key) are listed in `.env.example`: paths,
+`GEMINI_MODEL` (default `gemini-3.5-flash-lite`) and `EMBEDDING_MODEL`
+(default `all-MiniLM-L6-v2`).
 
 ## How to test
 
@@ -40,9 +63,19 @@ Paths can be changed with the `NETFLIX_CSV_PATH`, `NETFLIX_TITLES_CSV_PATH` and
 pytest
 ```
 
+The tests use a tiny database, a fake embedder and fake LLMs, so they need no
+API key, no model download and no network.
+
 ## Known limitations
 
-- `POST /ask` (Part 3, RAG Q&A) is not built yet.
+- `POST /ask` answers are only checked by hand on a few questions; there is no
+  automatic measure of answer quality.
+- Search is by meaning only, so exact names match poorly: "movies with Shah
+  Rukh Khan" returns *Rukh* first. Keyword search alongside would fix this.
+- The embedding model reads only the first 256 word pieces; 154 of 6,180
+  descriptions are cut off (the end of long cast lists).
+- `/ask` doesn't use the structured filters: "a comedy from India" relies on
+  the text, not on the `country` column.
 - `ingest.py` loads `data/netflix_movies.csv`, which I cleaned from
   `data/netflix_titles.csv` before running it. That cleaning step is not in
   `ingest.py`, so it can't be rerun from the original file alone.

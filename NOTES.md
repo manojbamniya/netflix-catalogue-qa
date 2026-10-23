@@ -58,22 +58,47 @@ and appends `Genres: … Duration: … Cast: … Director: …` to
 
 ## 3. RAG choices
 
-**[TODO — not built yet.]** Planned: embed `movie_description` per title (one
-chunk per title — descriptions are short, so no splitting).
-Known issues to decide on:
-- Each description contains everything twice (no-space + readable version).
-- Country and title aren't in the text, so "a comedy from India" relies on the
-  description. Could add `Country:` or filter by country before retrieval.
-- Model: **[TODO]**. Vector store: **[TODO]**.
+**[TODO: check and reword]**
+
+- **What I embed:** one text per title, no chunking (titles are short):
+  `"<title> (<type>, <year>). Country: <country>. Rating: <rating>. <movie_description>"`.
+  Title, country and year go first because the model only reads the first 256
+  word pieces — 154 of 6,180 texts are longer and lose the end of the cast list.
+- **Embedding model:** `all-MiniLM-L6-v2` (sentence-transformers). Small
+  (~90 MB), free, runs locally; 6,180 titles take ~13 s on my laptop.
+- **Vector store:** none — numpy. 6,180 × 384 floats is ~9 MB; a full dot
+  product per question takes milliseconds. Vectors are normalised, so the dot
+  product is cosine similarity. Built once by `python -m rag.index`, saved to
+  `data/embeddings.npz`.
+- **Retrieval:** top 8 titles (`TOP_K`), passed to Gemini
+  (`gemini-3.5-flash-lite`, temperature 0.2) with a prompt that says to use
+  only those titles, each labelled with its `show_id`.
+- **Grounding:** Gemini must reply in JSON (`answer`, `show_ids`). The code
+  then drops any `show_id` that wasn't among the 8 retrieved — so a made-up
+  title can never be returned as a source. If no valid source is left, the
+  answer is replaced with a fixed "couldn't find a title" message. Tested with
+  fake LLMs that return made-up ids.
+- **What I saw when testing retrieval:** good for themes ("anime about gambling
+  at school" → *Kakegurui*; "Transformers" → all 5 Transformers shows). Weak
+  for names: "movies with Shah Rukh Khan" → *Rukh* first, because embeddings
+  match meaning, not exact words. Hybrid search (add BM25 keyword scores) would
+  fix it. *City of Joy* didn't make the top 5 for "women healing after war in
+  Congo" — maybe the no-space duplicate text in `movie_description` adds noise.
+- **With Gemini:** "comedy from India with a strong female lead" → *Aiyyaa*;
+  "anime about gambling at school" → *Kakegurui*; "time travel on Mars with
+  Tom Cruise" (not in the catalogue) → the no-match message, no sources.
 
 ## 4. What would break at 100,000 titles
 
 - **Hand cleaning.** `netflix_movies.csv` was made outside `ingest.py`. At 100k
   rows (and with re-deliveries) the cleaning has to be code that reruns.
-- **Embedding at startup.** Embedding 100k texts on CPU takes many minutes;
-  embeddings must be computed once in a separate step and saved to disk.
-- **Vector search.** numpy brute force over 100k × 384 floats (~150 MB) still
-  works but is slow per query; I'd move to FAISS.
+- **Building the index.** 6,180 titles take ~13 s, so 100k take ~4 min — fine
+  as a separate step, but every rebuild re-embeds everything. I'd embed only
+  new or changed titles.
+- **Vector search.** numpy over 100k × 384 floats is ~150 MB in memory and
+  ~16× slower per question; I'd move to FAISS.
+- **`/ask` loads the whole index into each server process** — with several
+  workers that's 150 MB each.
 - **Deep pagination.** `LIMIT/OFFSET` scans all skipped rows; page 2,000 gets
   slow. Keyset pagination (`WHERE show_id > ?`) fixes it.
 - **`/stats` per request.** Counting by country on every call — cache it or
@@ -87,12 +112,15 @@ Known issues to decide on:
 - Profile both CSVs and compare them (found the *Sarkar* duplicate, the
   *Tiger* / *Kakegurui* same-name pairs, the trailing commas).
 - Write `ingest.py`, plus the pandas snippets I used to check the data.
+- Write the FastAPI app (`api/`), the RAG code (`rag/`) and the tests.
+- Debug a scipy crash on macOS 27 (fixed by using Python 3.13).
 
 Where I overrode it:
 - It recommended `ingest.py` load `netflix_titles.csv` and do all cleaning
   there. I chose to load my own `netflix_movies.csv`.
 - It suggested `release_year`; I used `year` (the README overview says "year").
 - It suggested keeping all 12 columns; I kept only the 7 I need.
+- It suggested Groq for the LLM; I picked Gemini.
 
 Accepted without fully understanding: **[TODO — be honest]**
 
