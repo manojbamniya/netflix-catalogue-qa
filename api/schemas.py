@@ -2,7 +2,10 @@
 
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+MIN_QUESTION_LENGTH = 3
+MAX_QUESTION_LENGTH = 500
 
 
 class TitleType(str, Enum):
@@ -47,3 +50,31 @@ class Stats(BaseModel):
     count_by_type: dict[str, int]
     top_countries: list[CountryCount]
     titles_without_country: int
+
+
+class AskRequest(BaseModel):
+    """Body of POST /ask."""
+
+    # Strip spaces first, so "   " counts as empty and is rejected.
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    question: str = Field(
+        min_length=MIN_QUESTION_LENGTH,
+        max_length=MAX_QUESTION_LENGTH,
+        examples=["Suggest me a comedy movie from India with a strong female lead"],
+    )
+
+
+class Source(BaseModel):
+    """A title the answer was based on."""
+
+    show_id: str
+    title: str
+
+
+class AskResponse(BaseModel):
+    """Answer from POST /ask, with the titles it was based on."""
+
+    answer: str
+    show_ids: list[str]
+    sources: list[Source]
