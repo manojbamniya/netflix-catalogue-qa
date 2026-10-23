@@ -1,87 +1,69 @@
-"""Build the embedding index: one vector per title, saved to data/embeddings.npz.
+"""Embeddings: turn every title into numbers once, then find titles like a question.
 
-Run after ingest.py (takes a minute or two the first time, while the model
-downloads):
+Build the index (after python ingest.py):
     python -m rag.index
 """
 
-import logging
+import os
 import sqlite3
-from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+from sentence_transformers import SentenceTransformer
 
-from rag import settings
-
-logger = logging.getLogger(__name__)
-
-# A function that turns texts into one normalised vector per text.
-Embedder = Callable[[list[str]], np.ndarray]
-
-BATCH_SIZE = 64
+DB_PATH = Path(os.getenv("NETFLIX_DB_PATH", "data/netflix.db"))
+INDEX_PATH = Path(os.getenv("NETFLIX_INDEX_PATH", "data/embeddings.npz"))
+MODEL_NAME = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")  # small and free
 
 
-def load_embedder(model_name: str = settings.EMBEDDING_MODEL) -> Embedder:
-    """Load the sentence-transformers model and return an embed(texts) function.
+@lru_cache(maxsize=1)
+def load_model() -> SentenceTransformer:
+    """Load the embedding model once (it's downloaded the first time)."""
+    return SentenceTransformer(MODEL_NAME)
 
-    Vectors are normalised to length 1, so a dot product is cosine similarity.
+
+def embed(texts: list[str]) -> np.ndarray:
+    """Turn each text into 384 numbers, scaled to length 1.
+
+    With length-1 vectors, a dot product is the cosine similarity.
     """
-    from sentence_transformers import SentenceTransformer  # slow import
-
-    model = SentenceTransformer(model_name)
-
-    def embed(texts: list[str]) -> np.ndarray:
-        return model.encode(
-            texts, batch_size=BATCH_SIZE, normalize_embeddings=True
-        ).astype(np.float32)
-
-    return embed
+    return load_model().encode(texts, normalize_embeddings=True)
 
 
-def build_document(title: dict) -> str:
-    """The text we embed for one title.
-
-    Title, type, year and country go first: the model only reads the first
-    ~256 word pieces, and "a comedy from India" needs the country to match.
-    """
-    country = title["country"] or "Unknown"
-    rating = title["rating"] or "Unrated"
+def document(title: dict) -> str:
+    """The text we embed for one title. Title and country go first, because the
+    model only reads about the first 256 word pieces."""
     return (
         f"{title['title']} ({title['type']}, {title['year']}). "
-        f"Country: {country}. Rating: {rating}. {title['movie_description']}"
+        f"Country: {title['country'] or 'Unknown'}. "
+        f"Rating: {title['rating'] or 'Unrated'}. {title['movie_description']}"
     )
 
 
-def load_titles(db_path: Path) -> list[dict]:
-    """Read every title from the database, in show_id order."""
+def build_index(db_path: Path, index_path: Path) -> int:
+    """Embed every title and save show_ids + vectors. Returns how many."""
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM titles ORDER BY show_id").fetchall()
-    return [dict(row) for row in rows]
-
-
-def build_index(db_path: Path, index_path: Path, embed: Embedder) -> int:
-    """Embed every title and save show_ids + vectors. Returns the title count."""
-    titles = load_titles(db_path)
-    documents = [build_document(t) for t in titles]
-    vectors = embed(documents)
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(index_path, ids=np.array([t["show_id"] for t in titles]), vectors=vectors)
+        titles = [dict(row) for row in conn.execute("SELECT * FROM titles")]
+    vectors = embed([document(t) for t in titles])
+    np.savez(index_path, ids=[t["show_id"] for t in titles], vectors=vectors)
     return len(titles)
 
 
-def main() -> None:
-    """Build the index from the database configured in settings."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    if not settings.DB_PATH.exists():
-        raise SystemExit(f"{settings.DB_PATH} not found - run `python ingest.py` first")
+def load_index(index_path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read back (show_ids, vectors) saved by build_index."""
+    data = np.load(index_path)
+    return data["ids"], data["vectors"]
 
-    logger.info("Loading embedding model %s", settings.EMBEDDING_MODEL)
-    embed = load_embedder()
-    count = build_index(settings.DB_PATH, settings.INDEX_PATH, embed)
-    print(f"Embedded {count} titles into {settings.INDEX_PATH}")
+
+def search(question: str, ids: np.ndarray, vectors: np.ndarray, k: int) -> list[str]:
+    """Return the show_ids of the k titles most similar to the question."""
+    scores = vectors @ embed([question])[0]  # one similarity score per title
+    best = np.argsort(-scores)[:k]  # highest scores first
+    return [str(ids[i]) for i in best]
 
 
 if __name__ == "__main__":
-    main()
+    count = build_index(DB_PATH, INDEX_PATH)
+    print(f"Embedded {count} titles into {INDEX_PATH}")

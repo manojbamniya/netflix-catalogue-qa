@@ -1,97 +1,89 @@
-"""Answer a question from retrieved titles with Gemini, and keep only real sources."""
+"""Ask Gemini to answer from the retrieved titles, then keep only real sources."""
 
+import os
 import sqlite3
-from typing import Any, Protocol
+from collections.abc import Callable
+from typing import Any
 
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
 from api import queries
-from rag.retriever import Retriever
+
+load_dotenv()  # reads GEMINI_API_KEY from .env
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+TIMEOUT_MS = 30_000  # per Gemini call
 
 NO_MATCH_ANSWER = "I couldn't find a title in the catalogue that answers this."
 
-SYSTEM_PROMPT = """You answer questions about a Netflix catalogue.
-Use ONLY the titles listed in the user's message. Do not use outside knowledge
-about films, people or plots, and never mention a title that isn't listed.
-If none of the listed titles fit the question, say so and return no show_ids.
-Return JSON with:
-  "answer": a short answer that names the titles you recommend and why,
-  "show_ids": the show_id of every title your answer is based on."""
+PROMPT = """You answer questions about a Netflix catalogue.
+Use ONLY the titles listed below. Never mention a title that isn't listed.
+Recommend the titles that fit best. If a title only partly fits, you may still
+suggest it and say what you're not sure about. Return no show_ids only if none
+of the titles are related to the question.
+Return JSON: "answer" (short, names the titles and why) and "show_ids"
+(the show_id of every title your answer uses)."""
 
 
 class LLMAnswer(BaseModel):
-    """What the LLM must return (enforced with Gemini's JSON schema output)."""
+    """The JSON shape Gemini must reply with."""
 
     answer: str
     show_ids: list[str]
 
 
-class LLM(Protocol):
-    """Anything that can answer a question from a block of context text."""
-
-    def generate(self, question: str, context: str) -> LLMAnswer: ...
-
-
-class GeminiLLM:
-    """Calls Gemini and asks for JSON matching LLMAnswer."""
-
-    TEMPERATURE = 0.2  # low: stick to the given titles, little creativity
-
-    def __init__(self, api_key: str, model: str):
-        self.client = genai.Client(api_key=api_key)
-        self.model = model
-
-    def generate(self, question: str, context: str) -> LLMAnswer:
-        """Send the titles and question; parse the JSON reply."""
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=f"Titles:\n{context}\n\nQuestion: {question}",
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=self.TEMPERATURE,
-                response_mime_type="application/json",
-                response_schema=LLMAnswer,
-            ),
-        )
-        return LLMAnswer.model_validate_json(response.text)
+# Any function that takes (question, titles text) and returns an LLMAnswer.
+# The real one is ask_gemini; tests pass a fake one.
+AskLLM = Callable[[str, str], LLMAnswer]
 
 
-def format_context(titles: list[dict[str, Any]]) -> str:
-    """One block of text per retrieved title, labelled with its show_id."""
-    blocks = [
+def ask_gemini(question: str, titles_text: str) -> LLMAnswer:
+    """Send the titles and question to Gemini and read its JSON reply."""
+    # Give up on a call after 30 s. Try up to 3 times when Gemini's servers are
+    # busy (5xx errors, e.g. "503 high demand"); not on 429 "quota used up",
+    # because retrying can't help with that.
+    retry = types.HttpRetryOptions(attempts=3, http_status_codes=[500, 502, 503, 504])
+    options = types.HttpOptions(timeout=TIMEOUT_MS, retry_options=retry)
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=options)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=f"Titles:\n{titles_text}\n\nQuestion: {question}",
+        config=types.GenerateContentConfig(
+            system_instruction=PROMPT,
+            temperature=0.2,  # low = stick to the given titles
+            response_mime_type="application/json",
+            response_schema=LLMAnswer,
+        ),
+    )
+    return LLMAnswer.model_validate_json(response.text)
+
+
+def titles_text(titles: list[dict[str, Any]]) -> str:
+    """One block per title, labelled with its show_id so Gemini can cite it."""
+    return "\n\n".join(
         f"[show_id: {t['show_id']}] {t['title']} ({t['type']}, {t['year']}, "
-        f"country: {t['country'] or 'Unknown'}, rating: {t['rating'] or 'Unrated'})\n"
-        f"{t['movie_description']}"
+        f"country: {t['country'] or 'Unknown'})\n{t['movie_description']}"
         for t in titles
-    ]
-    return "\n\n".join(blocks)
+    )
 
 
 def answer_question(
-    question: str,
-    conn: sqlite3.Connection,
-    retriever: Retriever,
-    llm: LLM,
-    top_k: int,
+    question: str, retrieved_ids: list[str], conn: sqlite3.Connection, ask: AskLLM
 ) -> dict[str, Any]:
-    """Retrieve titles, ask the LLM, and return the answer with its sources.
-
-    Any show_id the LLM returns that wasn't retrieved is dropped, so every
-    source really is a title the answer was given. If no valid source is left,
-    the answer is replaced with NO_MATCH_ANSWER.
-    """
-    retrieved_ids = retriever.search(question, k=top_k)
-    titles = [t for i in retrieved_ids if (t := queries.get_title(conn, i))]
-    reply = llm.generate(question, format_context(titles))
+    """Answer from the retrieved titles; drop any show_id the LLM made up."""
+    titles = [queries.get_title(conn, show_id) for show_id in retrieved_ids]
+    titles = [t for t in titles if t]
+    reply = ask(question, titles_text(titles))
 
     by_id = {t["show_id"]: t for t in titles}
-    sources = [by_id[i] for i in dict.fromkeys(reply.show_ids) if i in by_id]
-    if not sources:
+    used_ids = [i for i in dict.fromkeys(reply.show_ids) if i in by_id]
+    if not used_ids:
         return {"answer": NO_MATCH_ANSWER, "show_ids": [], "sources": []}
     return {
         "answer": reply.answer,
-        "show_ids": [t["show_id"] for t in sources],
-        "sources": [{"show_id": t["show_id"], "title": t["title"]} for t in sources],
+        "show_ids": used_ids,
+        "sources": [{"show_id": i, "title": by_id[i]["title"]} for i in used_ids],
     }
