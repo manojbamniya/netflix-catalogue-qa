@@ -1,3 +1,62 @@
+# Netflix Catalogue Q&A System
+
+Loads the Netflix catalogue into SQLite and serves it through a small FastAPI
+API. My reasoning and data findings are in [NOTES.md](NOTES.md).
+
+## Setup
+
+Needs Python 3.10 or newer.
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## How to run
+
+```bash
+python ingest.py                 # builds data/netflix.db and prints a summary
+uvicorn api.main:app --reload    # starts the API on http://127.0.0.1:8000
+```
+
+Open http://127.0.0.1:8000/docs to try the endpoints in the browser.
+
+| Endpoint | Example |
+|---|---|
+| `GET /titles` | `/titles?country=India&type=Movie&release_year=2019&rating=TV-MA&page=1&page_size=20` |
+| `GET /titles/{show_id}` | `/titles/81075235` |
+| `GET /stats` | `/stats` |
+
+`?country=Unknown` returns titles with no country. `type` is `Movie` or
+`TV Show`. Bad parameters return a 400 error naming the parameter.
+
+Paths can be changed with the `NETFLIX_CSV_PATH`, `NETFLIX_TITLES_CSV_PATH` and
+`NETFLIX_DB_PATH` environment variables.
+
+## How to test
+
+```bash
+pytest
+```
+
+## Known limitations
+
+- `POST /ask` (Part 3, RAG Q&A) is not built yet.
+- `ingest.py` loads `data/netflix_movies.csv`, which I cleaned from
+  `data/netflix_titles.csv` before running it. That cleaning step is not in
+  `ingest.py`, so it can't be rerun from the original file alone.
+- 54 of the 6,234 original rows were dropped during cleaning (see NOTES.md).
+- Cast, director and genres are only inside `movie_description`, so you can't
+  filter by actor or genre.
+- `movie_description` holds each value twice: without spaces (`AlanMarriott`)
+  and readable (`Alan Marriott`).
+- Pagination uses `LIMIT/OFFSET`, which gets slow for very deep pages.
+
+---
+
+*Below is the original assignment brief, unchanged.*
+
 # Intern Assignment — Netflix Catalog Q&A System
 
 Welcome. This is a take-home assignment to help us understand how you think about
