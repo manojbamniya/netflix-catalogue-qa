@@ -1,17 +1,19 @@
-"""FastAPI app: list, fetch, summarise and ask questions about Netflix titles.
+"""FastAPI app for the Netflix catalogue.
 
-Run from the project root (after python ingest.py and python -m rag.index):
+Run (after python ingest.py and python -m rag.index):
     uvicorn api.main:app --reload
-Then open http://127.0.0.1:8000/docs to try the endpoints.
+Then open http://127.0.0.1:8000/docs to try it.
 """
 
 import logging
+import os
 import sqlite3
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
 from functools import lru_cache
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Literal
 
+import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -19,137 +21,120 @@ from google.genai import errors as genai_errors
 from pydantic import ValidationError
 
 from api import queries
-from api.database import DB_PATH, get_connection
-from api.schemas import (
-    AskRequest,
-    AskResponse,
-    Stats,
-    Title,
-    TitlePage,
-    TitleType,
-)
-from rag import settings
-from rag.answer import LLM, GeminiLLM, answer_question
-from rag.index import load_embedder
-from rag.retriever import Retriever
+from api.schemas import AskRequest, AskResponse, Stats, Title, TitlePage
+from rag import answer, index
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PAGE_SIZE = 20
+DB_PATH = Path(os.getenv("NETFLIX_DB_PATH", "data/netflix.db"))
 MAX_PAGE_SIZE = 100
-TOP_COUNTRIES = 10
-MIN_YEAR = 1900
-MAX_YEAR = 2100
+TOP_K = 15  # titles retrieved per question and given to Gemini
+
+app = FastAPI(title="Netflix Catalogue API")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Refuse to start if the database hasn't been built yet."""
+def connect(db_path: Path) -> sqlite3.Connection:
+    """Open the database read-only; rows can be read by column name.
+
+    check_same_thread=False: FastAPI may open it in one thread and use it in
+    another. Each request still gets its own connection.
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def get_connection() -> Iterator[sqlite3.Connection]:
+    """Give each request a connection, and close it afterwards."""
     if not DB_PATH.exists():
-        raise RuntimeError(f"{DB_PATH} not found - run `python ingest.py` first")
-    logger.info("Using database %s", DB_PATH)
-    yield
+        raise HTTPException(503, f"{DB_PATH} not found - run `python ingest.py`")
+    conn = connect(DB_PATH)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
-app = FastAPI(title="Netflix Catalogue API", lifespan=lifespan)
+@lru_cache(maxsize=1)
+def get_index() -> tuple[np.ndarray, np.ndarray]:
+    """Load the embeddings once, on the first /ask."""
+    if not index.INDEX_PATH.exists():
+        raise HTTPException(503, "Index not found - run `python -m rag.index`")
+    return index.load_index(index.INDEX_PATH)
+
+
+def get_llm() -> answer.AskLLM:
+    """The function /ask uses to call the LLM (tests swap in a fake one)."""
+    if not answer.GEMINI_API_KEY:
+        raise HTTPException(503, "GEMINI_API_KEY is not set - add it to .env")
+    return answer.ask_gemini
+
 
 Connection = Annotated[sqlite3.Connection, Depends(get_connection)]
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_error_as_400(
+async def bad_input_is_400(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Return 400 (not FastAPI's default 422) for bad query parameters."""
-    errors = [
-        {"param": ".".join(str(p) for p in e["loc"][1:]), "message": e["msg"]}
-        for e in exc.errors()
-    ]
+    """Return 400 (FastAPI's default is 422) and name each bad parameter."""
+    errors = [{"param": e["loc"][-1], "message": e["msg"]} for e in exc.errors()]
     return JSONResponse(status_code=400, content={"detail": errors})
 
 
-@app.get("/titles", response_model=TitlePage)
+@app.get("/titles")
 def list_titles(
     conn: Connection,
-    country: Annotated[
-        str | None,
-        Query(min_length=1, description='e.g. "India", or "Unknown" for no country'),
-    ] = None,
-    release_year: Annotated[int | None, Query(ge=MIN_YEAR, le=MAX_YEAR)] = None,
-    type: Annotated[TitleType | None, Query()] = None,
-    rating: Annotated[str | None, Query(min_length=1, description="e.g. TV-MA")] = None,
+    country: Annotated[str | None, Query(min_length=1)] = None,
+    release_year: Annotated[int | None, Query(ge=1900, le=2100)] = None,
+    type: Literal["Movie", "TV Show"] | None = None,
+    rating: Annotated[str | None, Query(min_length=1)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 20,
 ) -> TitlePage:
-    """List titles matching all given filters, one page at a time."""
-    filters = queries.TitleFilters(
-        country=country,
-        release_year=release_year,
-        type=type.value if type else None,
-        rating=rating,
-    )
+    """List titles matching all the given filters, one page at a time.
+
+    country=Unknown returns titles with no country.
+    """
+    filters = {"country": country, "year": release_year, "type": type, "rating": rating}
     offset = (page - 1) * page_size
     total, rows = queries.list_titles(conn, filters, limit=page_size, offset=offset)
-    return TitlePage(
-        total=total,
-        page=page,
-        page_size=page_size,
-        items=[Title(**row) for row in rows],
-    )
+    return TitlePage(total=total, page=page, page_size=page_size, items=rows)
 
 
-@app.get("/titles/{show_id}", response_model=Title)
+@app.get("/titles/{show_id}")
 def get_title(show_id: str, conn: Connection) -> Title:
-    """Fetch one title by show_id; 404 if it doesn't exist."""
+    """One title by show_id, or 404."""
     row = queries.get_title(conn, show_id)
     if row is None:
-        raise HTTPException(status_code=404, detail=f"No title with show_id {show_id}")
+        raise HTTPException(404, f"No title with show_id {show_id}")
     return Title(**row)
 
 
-@app.get("/stats", response_model=Stats)
+@app.get("/stats")
 def get_stats(conn: Connection) -> Stats:
     """Total titles, count by type, top 10 countries, titles with no country."""
-    return Stats(**queries.get_stats(conn, top_n=TOP_COUNTRIES))
+    return Stats(**queries.get_stats(conn))
 
 
-@lru_cache(maxsize=1)
-def get_retriever() -> Retriever:
-    """Load the embedding model and index once, on the first /ask request."""
-    if not settings.INDEX_PATH.exists():
-        raise HTTPException(
-            status_code=503,
-            detail=f"{settings.INDEX_PATH} not found - run `python -m rag.index`",
-        )
-    return Retriever.load(settings.INDEX_PATH, load_embedder())
-
-
-@lru_cache(maxsize=1)
-def get_llm() -> LLM:
-    """Create the Gemini client once; 503 if no API key is configured."""
-    if not settings.GEMINI_API_KEY:
-        raise HTTPException(
-            status_code=503, detail="GEMINI_API_KEY is not set - add it to .env"
-        )
-    return GeminiLLM(api_key=settings.GEMINI_API_KEY, model=settings.GEMINI_MODEL)
-
-
-@app.post("/ask", response_model=AskResponse)
+@app.post("/ask")
 def ask(
     body: AskRequest,
     conn: Connection,
-    retriever: Annotated[Retriever, Depends(get_retriever)],
-    llm: Annotated[LLM, Depends(get_llm)],
+    saved_index: Annotated[tuple[np.ndarray, np.ndarray], Depends(get_index)],
+    llm: Annotated[answer.AskLLM, Depends(get_llm)],
 ) -> AskResponse:
-    """Answer a question from the catalogue, with the show_ids it was based on."""
+    """Answer a question from the catalogue, with the show_ids it used."""
+    ids, vectors = saved_index
+    retrieved = index.search(body.question, ids, vectors, k=TOP_K)
     try:
-        result = answer_question(
-            body.question, conn, retriever, llm, top_k=settings.TOP_K
-        )
+        result = answer.answer_question(body.question, retrieved, conn, llm)
     except (genai_errors.APIError, ValidationError) as exc:
-        # APIError: Gemini failed or refused. ValidationError: reply wasn't our JSON.
+        # APIError: Gemini failed. ValidationError: its reply wasn't our JSON.
         logger.error("LLM request failed: %s", exc)
+        if getattr(exc, "code", None) == 429:  # free quota used up (resets daily)
+            raise HTTPException(503, "Gemini quota used up - try later") from exc
         raise HTTPException(
-            status_code=502, detail="The language model request failed - try again"
+            502, "The language model request failed - try again"
         ) from exc
     return AskResponse(**result)

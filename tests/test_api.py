@@ -7,7 +7,7 @@ from conftest import TITLES
 from fastapi.testclient import TestClient
 from httpx2 import Response
 
-import api.main
+from api import main
 
 
 def ids(response: Response) -> list[str]:
@@ -86,16 +86,17 @@ def test_stats_counts_and_leaves_missing_country_out_of_top(client: TestClient) 
 
     assert stats["total_titles"] == 6
     assert stats["count_by_type"] == {"Movie": 4, "TV Show": 2}
-    assert stats["top_countries"][0] == {"country": "India", "count": 3}
-    assert all(c["country"] for c in stats["top_countries"])
+    assert list(stats["top_countries"].items())[0] == ("India", 3)
+    assert None not in stats["top_countries"]
     assert stats["titles_without_country"] == 1
 
 
-def test_app_refuses_to_start_without_database(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_missing_database_returns_503(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(api.main, "DB_PATH", tmp_path / "missing.db")
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "missing.db")
 
-    with pytest.raises(RuntimeError, match="run `python ingest.py` first"):
-        with TestClient(api.main.app):
-            pass
+    response = client.get("/stats")
+
+    assert response.status_code == 503
+    assert "run `python ingest.py`" in response.json()["detail"]

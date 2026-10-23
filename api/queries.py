@@ -1,95 +1,80 @@
-"""SQL queries behind the endpoints. All values are passed as ? parameters."""
+"""SQL for the endpoints. Values are always passed as ? (never pasted into SQL)."""
 
 import sqlite3
-from dataclasses import dataclass
 from typing import Any
 
-UNKNOWN_COUNTRY = "Unknown"  # ?country=Unknown means "titles with no country"
-TITLE_COLUMNS = "show_id, type, title, country, year, rating, movie_description"
+COLUMNS = "show_id, type, title, country, year, rating, movie_description"
+UNKNOWN_COUNTRY = "unknown"  # ?country=Unknown means "titles with no country"
 
 
-@dataclass
-class TitleFilters:
-    """Optional filters for GET /titles. None means "don't filter on this"."""
-
-    country: str | None = None
-    release_year: int | None = None
-    type: str | None = None
-    rating: str | None = None
-
-
-def build_where(filters: TitleFilters) -> tuple[str, list[Any]]:
-    """Turn the filters into a WHERE clause and its parameters.
-
-    Country uses the title_countries table, so "India" matches
-    "United States, India" but not "British Indian Ocean Territory".
-    """
+def build_where(
+    country: str | None, year: int | None, type: str | None, rating: str | None
+) -> tuple[str, list[Any]]:
+    """Turn the filters into a WHERE clause and its values. None = no filter."""
     clauses: list[str] = []
-    params: list[Any] = []
+    values: list[Any] = []
 
-    if filters.country is not None:
-        if filters.country.lower() == UNKNOWN_COUNTRY.lower():
-            clauses.append("show_id NOT IN (SELECT show_id FROM title_countries)")
-        else:
-            clauses.append(
-                "show_id IN (SELECT show_id FROM title_countries "
-                "WHERE country = ? COLLATE NOCASE)"
-            )
-            params.append(filters.country)
-    if filters.release_year is not None:
+    if country and country.lower() == UNKNOWN_COUNTRY:
+        clauses.append("show_id NOT IN (SELECT show_id FROM title_countries)")
+    elif country:
+        clauses.append(
+            "show_id IN (SELECT show_id FROM title_countries "
+            "WHERE country = ? COLLATE NOCASE)"
+        )
+        values.append(country)
+    if year:
         clauses.append("year = ?")
-        params.append(filters.release_year)
-    if filters.type is not None:
+        values.append(year)
+    if type:
         clauses.append("type = ?")
-        params.append(filters.type)
-    if filters.rating is not None:
+        values.append(type)
+    if rating:
         clauses.append("rating = ? COLLATE NOCASE")
-        params.append(filters.rating)
+        values.append(rating)
 
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
-    return where, params
+    return where, values
 
 
 def list_titles(
-    conn: sqlite3.Connection, filters: TitleFilters, limit: int, offset: int
+    conn: sqlite3.Connection,
+    filters: dict[str, Any],
+    limit: int,
+    offset: int,
 ) -> tuple[int, list[dict[str, Any]]]:
-    """Return (total matching titles, one page of titles), sorted by title."""
-    where, params = build_where(filters)
-    total = conn.execute(f"SELECT COUNT(*) FROM titles{where}", params).fetchone()[0]
+    """Return (how many titles match, one page of them sorted by title)."""
+    where, values = build_where(**filters)
+    total = conn.execute(f"SELECT COUNT(*) FROM titles{where}", values).fetchone()[0]
     rows = conn.execute(
-        f"SELECT {TITLE_COLUMNS} FROM titles{where} "
-        "ORDER BY title, show_id LIMIT ? OFFSET ?",
-        [*params, limit, offset],
+        f"SELECT {COLUMNS} FROM titles{where} ORDER BY title, show_id LIMIT ? OFFSET ?",
+        [*values, limit, offset],
     ).fetchall()
     return total, [dict(row) for row in rows]
 
 
 def get_title(conn: sqlite3.Connection, show_id: str) -> dict[str, Any] | None:
-    """Return one title by show_id, or None if it doesn't exist."""
+    """Return one title, or None if there's no such show_id."""
     row = conn.execute(
-        f"SELECT {TITLE_COLUMNS} FROM titles WHERE show_id = ?", [show_id]
+        f"SELECT {COLUMNS} FROM titles WHERE show_id = ?", [show_id]
     ).fetchone()
     return dict(row) if row else None
 
 
-def get_stats(conn: sqlite3.Connection, top_n: int) -> dict[str, Any]:
-    """Total titles, count per type, top countries, and titles with no country."""
+def get_stats(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Total titles, count per type, top 10 countries, titles with no country."""
     total = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
-    by_type = conn.execute(
-        "SELECT type, COUNT(*) FROM titles GROUP BY type ORDER BY type"
-    ).fetchall()
+    by_type = conn.execute("SELECT type, COUNT(*) FROM titles GROUP BY type")
     top_countries = conn.execute(
-        "SELECT country, COUNT(*) AS count FROM title_countries "
-        "GROUP BY country ORDER BY count DESC, country LIMIT ?",
-        [top_n],
-    ).fetchall()
+        "SELECT country, COUNT(*) AS n FROM title_countries "
+        "GROUP BY country ORDER BY n DESC, country LIMIT 10"
+    )
     without_country = conn.execute(
         "SELECT COUNT(*) FROM titles "
         "WHERE show_id NOT IN (SELECT show_id FROM title_countries)"
     ).fetchone()[0]
     return {
         "total_titles": total,
-        "count_by_type": {row[0]: row[1] for row in by_type},
-        "top_countries": [dict(row) for row in top_countries],
+        "count_by_type": dict(by_type.fetchall()),
+        "top_countries": dict(top_countries.fetchall()),
         "titles_without_country": without_country,
     }

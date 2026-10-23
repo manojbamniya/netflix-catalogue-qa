@@ -1,4 +1,4 @@
-"""Shared test setup: a tiny database and a TestClient that reads it."""
+"""Shared test setup: a tiny database, and a test client that reads it."""
 
 import sqlite3
 from collections.abc import Iterator
@@ -8,9 +8,8 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-import api.main
 import ingest
-from api.database import get_connection, open_connection
+from api import main
 
 TITLES = [
     # show_id, type, title, country, year, rating
@@ -25,26 +24,26 @@ TITLES = [
 
 @pytest.fixture
 def db_path(tmp_path: Path) -> Path:
-    """Build the tiny database with ingest.write_database and return its path."""
+    """Build the tiny database with ingest.write_database."""
     df = pd.DataFrame(
         TITLES, columns=["show_id", "type", "title", "country", "year", "rating"]
     ).assign(movie_description="Some text.")
     path = tmp_path / "test.db"
-    ingest.write_database(df, path)
+    ingest.write_database(df, ingest.split_countries(df), path)
     return path
 
 
 @pytest.fixture
-def client(db_path: Path) -> Iterator[TestClient]:
+def conn(db_path: Path) -> Iterator[sqlite3.Connection]:
+    """A connection to the tiny database."""
+    connection = main.connect(db_path)
+    yield connection
+    connection.close()
+
+
+@pytest.fixture
+def client(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """A test client whose endpoints read the tiny database."""
-
-    def test_connection() -> Iterator[sqlite3.Connection]:
-        conn = open_connection(db_path)
-        try:
-            yield conn
-        finally:
-            conn.close()
-
-    api.main.app.dependency_overrides[get_connection] = test_connection
-    yield TestClient(api.main.app)
-    api.main.app.dependency_overrides.clear()
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    yield TestClient(main.app)
+    main.app.dependency_overrides.clear()

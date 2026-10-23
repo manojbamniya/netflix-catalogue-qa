@@ -1,22 +1,10 @@
-"""Request and response shapes for the API."""
-
-from enum import Enum
+"""Shapes of the API's requests and responses."""
 
 from pydantic import BaseModel, ConfigDict, Field
 
-MIN_QUESTION_LENGTH = 3
-MAX_QUESTION_LENGTH = 500
-
-
-class TitleType(str, Enum):
-    """The two values of the type column."""
-
-    MOVIE = "Movie"
-    TV_SHOW = "TV Show"
-
 
 class Title(BaseModel):
-    """One row of the titles table."""
+    """One title from the database."""
 
     show_id: str
     type: str
@@ -28,19 +16,12 @@ class Title(BaseModel):
 
 
 class TitlePage(BaseModel):
-    """One page of results from GET /titles."""
+    """One page of GET /titles. total = matching titles across all pages."""
 
-    total: int  # matching titles across all pages
+    total: int
     page: int
     page_size: int
     items: list[Title]
-
-
-class CountryCount(BaseModel):
-    """How many titles list a country."""
-
-    country: str
-    count: int
 
 
 class Stats(BaseModel):
@@ -48,33 +29,20 @@ class Stats(BaseModel):
 
     total_titles: int
     count_by_type: dict[str, int]
-    top_countries: list[CountryCount]
+    top_countries: dict[str, int]
     titles_without_country: int
 
 
 class AskRequest(BaseModel):
-    """Body of POST /ask."""
+    """Body of POST /ask. Spaces are trimmed first, so "     " is rejected."""
 
-    # Strip spaces first, so "   " counts as empty and is rejected.
     model_config = ConfigDict(str_strip_whitespace=True)
-
-    question: str = Field(
-        min_length=MIN_QUESTION_LENGTH,
-        max_length=MAX_QUESTION_LENGTH,
-        examples=["Suggest me a comedy movie from India with a strong female lead"],
-    )
-
-
-class Source(BaseModel):
-    """A title the answer was based on."""
-
-    show_id: str
-    title: str
+    question: str = Field(min_length=3, max_length=500)
 
 
 class AskResponse(BaseModel):
-    """Answer from POST /ask, with the titles it was based on."""
+    """The answer and the titles it was based on."""
 
     answer: str
     show_ids: list[str]
-    sources: list[Source]
+    sources: list[dict[str, str]]  # [{"show_id": ..., "title": ...}]
