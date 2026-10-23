@@ -2,6 +2,15 @@ pandas==2.3.3
 fastapi==0.161.1
 uvicorn==0.54.0
 
+# RAG (Part 3)
+sentence-transformers==6.2.0
+google-genai==2.33.0
+python-dotenv==1.2.4
+# scipy 1.15.3 is the last release for Python 3.10, but it won't load on
+# macOS 27; newer Pythons get 1.18.1, which does.
+scipy==1.15.3; python_version < "3.11"
+scipy==1.18.1; python_version >= "3.11"
+
 # testing
 pytest==8.4.2
 httpx2==2.14.0  # used by FastAPI's TestClient
