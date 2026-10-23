@@ -46,7 +46,7 @@ Open http://127.0.0.1:8000/docs to try the endpoints in the browser.
 `POST /ask` returns `{"answer": ..., "show_ids": [...], "sources": [{"show_id", "title"}]}`.
 Every `show_id` is a title that was retrieved and given to the model; if none
 fit, the answer says so and `sources` is empty. It returns 503 if the key or
-the index is missing, and 502 if Gemini fails.
+the index is missing or the Gemini quota is used up, and 502 if Gemini fails.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/ask -H "Content-Type: application/json" \
@@ -70,10 +70,11 @@ API key, no model download and no network.
 
 - `POST /ask` answers are only checked by hand on a few questions; there is no
   automatic measure of answer quality.
-- Search is by meaning only, so exact names match poorly: "movies with Shah
-  Rukh Khan" returns *Rukh* first. Keyword search alongside would fix this.
-- The embedding model reads only the first 256 word pieces; 154 of 6,180
-  descriptions are cut off (the end of long cast lists).
+- Search is by meaning only, so exact names match poorly: for "movies with
+  Shah Rukh Khan" the first of his films is 15th. Keyword search alongside
+  would fix this.
+- The free Gemini key has a small daily limit per model (about 20 requests on
+  `gemini-3.6-flash`).
 - `/ask` doesn't use the structured filters: "a comedy from India" relies on
   the text, not on the `country` column.
 - `ingest.py` loads `data/netflix_movies.csv`, which I cleaned from
@@ -82,8 +83,8 @@ API key, no model download and no network.
 - 54 of the 6,234 original rows were dropped during cleaning (see NOTES.md).
 - Cast, director and genres are only inside `movie_description`, so you can't
   filter by actor or genre.
-- `movie_description` holds each value twice: without spaces (`AlanMarriott`)
-  and readable (`Alan Marriott`).
+- `movie_description` has no commas, so lists of names run together
+  ("Alan Marriott Andrew Toth").
 - Pagination uses `LIMIT/OFFSET`, which gets slow for very deep pages.
 
 ---
