@@ -70,10 +70,8 @@ def list_titles(
     total = conn.execute(count_sql, values).fetchone()[0]
 
     # 2. Get one page of them. LIMIT and OFFSET add two more ?s at the end.
-    page_sql = (
-        "SELECT " + COLUMNS + " FROM titles" + where
-        + " ORDER BY title, show_id LIMIT ? OFFSET ?"
-    )
+    page_sql = "SELECT " + COLUMNS + " FROM titles" + where
+    page_sql = page_sql + " ORDER BY title, show_id LIMIT ? OFFSET ?"
     page_values = values + [limit, offset]
     rows = conn.execute(page_sql, page_values).fetchall()
 

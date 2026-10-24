@@ -6,7 +6,7 @@
 
 `netflix_titles.csv` has 6,234 rows. I cleaned it in a Kaggle notebook into
 `netflix_movies.csv` (6,180 rows, 7 columns), which `ingest.py` loads.
-**[TODO: download the notebook and add it as `notebooks/clean_netflix.ipynb`]**
+The Kaggle notebook I used for the cleaning is `netflix-movies.ipynb`.
 
 | Problem | Rows | What I did |
 |---|---|---|
@@ -95,7 +95,9 @@ Where I overrode it: it wanted `ingest.py` to clean `netflix_titles.csv`
 itself — I load my own cleaned file. It suggested `release_year`, all 12
 columns and Groq; I chose `year`, 7 columns and Gemini.
 
-Accepted without fully understanding: one is the test file and some of the codes i am not understand well so i suggest claude to rewrite them
+Accepted without fully understanding: the test file, and some of the code I
+didn't understand well. For that code, I asked Claude to rewrite it more simply.
 
 ## 6. With another 4 hours
-with another 4 hours i will test more with myself and i can also make ui for it
+
+With another 4 hours, I would test more by myself and also build a UI for it.

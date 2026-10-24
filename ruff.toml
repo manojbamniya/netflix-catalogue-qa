@@ -1,6 +1,7 @@
 # Lint/format settings. Run: ruff check . && ruff format .
 target-version = "py310"  # lowest Python this project supports
 line-length = 88
+extend-exclude = ["*.ipynb"]  # the Kaggle cleaning notebook, kept as exported
 
 [lint]
 select = ["E", "F", "I", "UP", "B"]  # errors, pyflakes, imports, upgrades, bugbear
