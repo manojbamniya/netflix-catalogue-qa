@@ -12,10 +12,10 @@
 |---|---|---|
 | *Sarkar* listed twice (81075235, 81072516), identical except `show_id` | 1 | Dropped one. A normal duplicate check finds nothing — you must ignore `show_id`. |
 | Same name, different titles (*Tiger* 2016: India vs Argentina; *Kakegurui*: anime vs live action) | 55 names | Kept. Deduping by title would merge different shows. |
-| No `rating` | 10 | Dropped: too little info to use. |
-| 3 or more empty fields (e.g. no director, cast and country) | 43 | Dropped: too little info to use. Includes *Kikoriki* (no director, country, date added) and the 1925 *Pioneers: First Women Filmmakers* — losing those is the cost of the rule. |
-| No `country` (kept rows) | 429 | Kept, as NULL (section 2). |
-| No director / no cast | 1,969 / 570 | Kept: normal for TV, docs, stand-up. |
+| No `rating` | 10 | Dropped. It's a very small number, so it won't affect the suggestions. Rating is also one of the filters, and I don't want a filter column to be empty. |
+| 3 or more empty fields (e.g. no director, cast and country) | 43 | Dropped. With 3 or more columns empty, there's too little left to be useful for suggestions. Includes *Kikoriki* (no director, country, date added) and the 1925 *Pioneers: First Women Filmmakers* — losing those is the cost of the rule. |
+| No `country` (kept rows) | 429 | Kept, as NULL (section 2). They're about 7% of the data, so dropping them would lose too much. I didn't fill in a placeholder like an empty string either, because country is a filter and a fake value would cause problems there. |
+| No director / no cast | 1,969 / 570 | Kept: normal for TV, docs, stand-up. I replaced them with an empty string and combined them into `movie_description`, so the rest of the row isn't lost. |
 | Trailing comma in country (`"Poland,"`) | 3 | Removed; otherwise splitting makes an empty country. |
 | `release_year` after `date_added` | 9 | Left: I can't tell which is wrong. |
 | `date_added` with a leading space | 640 | Not used anywhere. |
@@ -87,8 +87,7 @@ with the original CSV to print what was dropped and why.
 ## 5. AI usage
 
 I used Claude Code to profile and compare the CSVs (it found the *Sarkar*
-duplicate, the same-name pairs, the trailing commas, and the "3 or more empty
-fields" pattern behind my dropped rows), and to write `ingest.py`, the API,
+duplicate, the same-name pairs), and to write `ingest.py`, the API,
 the RAG code and the tests. It also debugged a scipy crash on macOS 27 (fixed
 by using Python 3.13).
 
@@ -96,8 +95,7 @@ Where I overrode it: it wanted `ingest.py` to clean `netflix_titles.csv`
 itself — I load my own cleaned file. It suggested `release_year`, all 12
 columns and Groq; I chose `year`, 7 columns and Gemini.
 
-Accepted without fully understanding: **[TODO — after I've read all the code]**
+Accepted without fully understanding: one is the test file and some of the codes i am not understand well so i suggest claude to rewrite them
 
 ## 6. With another 4 hours
-
-**[TODO]**
+with another 4 hours i will test more with myself and i can also make ui for it
