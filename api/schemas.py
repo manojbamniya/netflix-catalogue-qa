@@ -40,7 +40,9 @@ class AskRequest(BaseModel):
     """Body of POST /ask. Spaces are trimmed first, so "     " is rejected."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
-    question: str = Field(min_length=MIN_QUESTION_LENGTH, max_length=MAX_QUESTION_LENGTH)
+    question: str = Field(
+        min_length=MIN_QUESTION_LENGTH, max_length=MAX_QUESTION_LENGTH
+    )
 
 
 class AskResponse(BaseModel):

@@ -46,7 +46,9 @@ def ask_gemini(question: str, titles_text: str) -> LLMAnswer:
     # Give up on a call after 30 s. Try up to 3 times when Gemini's servers are
     # busy (5xx errors, e.g. "503 high demand"); not on 429 "quota used up",
     # because retrying can't help with that.
-    retry = types.HttpRetryOptions(attempts=RETRY_ATTEMPTS, http_status_codes=[500, 502, 503, 504])
+    retry = types.HttpRetryOptions(
+        attempts=RETRY_ATTEMPTS, http_status_codes=[500, 502, 503, 504]
+    )
     options = types.HttpOptions(timeout=TIMEOUT_MS, retry_options=retry)
     client = genai.Client(api_key=GEMINI_API_KEY, http_options=options)
     response = client.models.generate_content(
