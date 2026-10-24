@@ -1,7 +1,5 @@
 # NOTES
 
-> DRAFT — reword in my own words; **[TODO]** = still to write.
-
 ## 1. Problems in the CSV, and what I did
 
 `netflix_titles.csv` has 6,234 rows. I cleaned it in a Kaggle notebook into
@@ -24,9 +22,9 @@ I also renamed `release_year` → `year` and merged genres, duration, cast and
 director into one `movie_description`:
 `"<description> Genres: … Duration: … Cast: … Director: …"`. My first version
 removed the spaces inside names (`AlanMarriott`), which broke search ("Alan
-Marriott" didn't match), so I redid it with spaces. **[TODO: the notebook still
-removes commas, so names run together — "Alan Marriott Andrew Toth"; keep
-commas inside `movie_description`]**
+Marriott" didn't match), so I redid it with spaces. The notebook still
+removes commas, so names run together ("Alan Marriott Andrew Toth"); I'd keep
+the commas inside `movie_description` next.
 
 `ingest.py` loads that file, removes the 3 trailing commas, and compares it
 with the original CSV to print what was dropped and why.

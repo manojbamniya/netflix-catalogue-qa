@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path(os.getenv("NETFLIX_DB_PATH", "data/netflix.db"))
 MAX_PAGE_SIZE = 100
+DEFAULT_PAGE_SIZE = 20
+MIN_YEAR, MAX_YEAR = 1900, 2100  # sane range for ?release_year=
 TOP_K = 15  # titles retrieved per question and given to Gemini
 
 app = FastAPI(title="Netflix Catalogue API")
@@ -86,11 +88,11 @@ async def bad_input_is_400(
 def list_titles(
     conn: Connection,
     country: Annotated[str | None, Query(min_length=1)] = None,
-    release_year: Annotated[int | None, Query(ge=1900, le=2100)] = None,
+    release_year: Annotated[int | None, Query(ge=MIN_YEAR, le=MAX_YEAR)] = None,
     type: Literal["Movie", "TV Show"] | None = None,
     rating: Annotated[str | None, Query(min_length=1)] = None,
     page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 20,
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> TitlePage:
     """List titles matching all the given filters, one page at a time.
 

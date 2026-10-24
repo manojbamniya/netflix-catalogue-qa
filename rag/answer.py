@@ -16,6 +16,7 @@ load_dotenv()  # reads GEMINI_API_KEY from .env
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 TIMEOUT_MS = 30_000  # per Gemini call
+RETRY_ATTEMPTS = 3  # when Gemini's servers are busy (5xx)
 
 NO_MATCH_ANSWER = "I couldn't find a title in the catalogue that answers this."
 
@@ -45,7 +46,7 @@ def ask_gemini(question: str, titles_text: str) -> LLMAnswer:
     # Give up on a call after 30 s. Try up to 3 times when Gemini's servers are
     # busy (5xx errors, e.g. "503 high demand"); not on 429 "quota used up",
     # because retrying can't help with that.
-    retry = types.HttpRetryOptions(attempts=3, http_status_codes=[500, 502, 503, 504])
+    retry = types.HttpRetryOptions(attempts=RETRY_ATTEMPTS, http_status_codes=[500, 502, 503, 504])
     options = types.HttpOptions(timeout=TIMEOUT_MS, retry_options=retry)
     client = genai.Client(api_key=GEMINI_API_KEY, http_options=options)
     response = client.models.generate_content(

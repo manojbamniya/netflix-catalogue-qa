@@ -2,6 +2,9 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+MIN_QUESTION_LENGTH = 3
+MAX_QUESTION_LENGTH = 500
+
 
 class Title(BaseModel):
     """One title from the database."""
@@ -37,7 +40,7 @@ class AskRequest(BaseModel):
     """Body of POST /ask. Spaces are trimmed first, so "     " is rejected."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
-    question: str = Field(min_length=3, max_length=500)
+    question: str = Field(min_length=MIN_QUESTION_LENGTH, max_length=MAX_QUESTION_LENGTH)
 
 
 class AskResponse(BaseModel):
